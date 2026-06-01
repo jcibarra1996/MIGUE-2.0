@@ -1,17 +1,16 @@
 "use server";
 
+import { createClient } from "@supabase/supabase-js";
 import { procesarActaConstitutiva } from "@/lib/extractorPdf";
 import { analizarTextoPoderes, analizarDocumentosIdentidad } from "@/lib/agenteClaude";
 import { validarIdentidad } from "@/lib/validador";
 import { generarContratoWord } from "@/lib/generadorWord";
 
-// ─── Tipos de retorno ─────────────────────────────────────────────────────────
+// ─── Tipos públicos ───────────────────────────────────────────────────────────
 
 export type AccionExitosa = {
   success: true;
-  // Buffer del .docx generado codificado en base64 para cruzar el límite servidor→cliente
   fileBase64: string;
-  // Nombre de archivo sugerido para la descarga
   fileName: string;
 };
 
@@ -22,75 +21,143 @@ export type AccionFallida = {
 
 export type ResultadoAccion = AccionExitosa | AccionFallida;
 
+/** Payload que el cliente envía después de subir los archivos a Supabase Storage. */
+export interface UrlsPayload {
+  urls: {
+    actaConstitutiva: string;
+    poderNotarial: string;
+    ine: string;
+    comprobanteDomicilio: string;
+    templateContrato: string;
+  };
+  /** Rutas dentro del bucket para poder borrarlas al terminar. */
+  paths: {
+    actaConstitutiva: string;
+    poderNotarial: string;
+    ine: string;
+    comprobanteDomicilio: string;
+    templateContrato: string;
+  };
+  monto_credito: string;
+  dias_credito: string;
+}
+
+// ─── Cliente Supabase (solo servidor) ────────────────────────────────────────
+
+// Usamos la service_role key para poder borrar archivos del bucket temporal.
+// Esta key NUNCA se expone al navegador — solo vive en el entorno de servidor.
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error(
+      "Faltan variables de entorno NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY."
+    );
+  }
+  return createClient(url, key);
+}
+
 // ─── Helpers internos ─────────────────────────────────────────────────────────
 
-function requerirArchivo(form: FormData, campo: string): File {
-  const archivo = form.get(campo);
-  if (!(archivo instanceof File) || archivo.size === 0) {
-    throw new Error(`Falta el archivo requerido: "${campo}"`);
+/**
+ * Descarga un archivo desde una URL pública de Supabase Storage
+ * y lo devuelve como Buffer de Node.js.
+ */
+async function urlABuffer(url: string): Promise<Buffer> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(
+      `No se pudo descargar el archivo desde Storage (${res.status}): ${url}`
+    );
   }
-  return archivo;
+  const ab = await res.arrayBuffer();
+  return Buffer.from(ab);
 }
 
-async function fileABuffer(file: File): Promise<Buffer> {
-  const arrayBuffer = await file.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+/**
+ * Descarga un archivo y devuelve su contenido como base64,
+ * junto con el MIME type detectado desde la URL.
+ */
+async function urlABase64(
+  url: string
+): Promise<{ base64: string; mime: "image/jpeg" | "image/png" | "image/gif" | "image/webp" }> {
+  const buf = await urlABuffer(url);
+  const base64 = buf.toString("base64");
+  const lower = url.toLowerCase();
+  const mime =
+    lower.includes(".png") ? "image/png" :
+    lower.includes(".gif") ? "image/gif" :
+    lower.includes(".webp") ? "image/webp" :
+    "image/jpeg";
+  return { base64, mime };
 }
 
-async function fileABase64(file: File): Promise<string> {
-  const buffer = await fileABuffer(file);
-  return buffer.toString("base64");
+/** Elimina en paralelo todas las rutas temporales del bucket. */
+async function limpiarBucket(paths: UrlsPayload["paths"]): Promise<void> {
+  try {
+    const supabase = getSupabaseAdmin();
+    const rutas = Object.values(paths);
+    const { error } = await supabase.storage.from("temporales").remove(rutas);
+    if (error) {
+      // No lanzamos — la limpieza es best-effort para no ocultar el éxito de la operación
+      console.warn("[limpiarBucket] No se pudieron borrar los temporales:", error.message);
+    }
+  } catch (e) {
+    console.warn("[limpiarBucket] Error al intentar limpiar:", (e as Error).message);
+  }
 }
 
 // ─── Server Action principal ──────────────────────────────────────────────────
 
 /**
- * Orquesta el pipeline completo de generación de contratos.
- * Al vivir como Server Action, Next.js aplica el bodySizeLimit configurado
- * en next.config.ts (50 MB), resolviendo el error 413 con Actas grandes.
+ * Recibe las URLs públicas de los 5 archivos ya subidos a Supabase Storage
+ * por el cliente, descarga los buffers en el servidor y ejecuta el pipeline
+ * completo de generación del contrato.
+ *
+ * Al no recibir archivos binarios, el payload JSON es < 1 KB,
+ * eliminando definitivamente el error 413 en Vercel Hobby.
  *
  * Flujo:
- *   1. Extraer texto del Acta Constitutiva (pdf-parse, sin API)
- *   2. Analizar poderes con Claude (API call #1)
- *   3. Analizar INE + comprobante con visión de Claude (API call #2)
- *   4. Validar identidad con Dice coefficient (sin API)
- *   5. Generar contrato Word con docxtemplater (sin API)
- *   6. Retornar el .docx como base64 al cliente
+ *   0. Descarga en paralelo los 5 buffers desde Supabase Storage
+ *   1. Extrae texto del Acta (pdf-parse, sin API externa)
+ *   2. Analiza poderes con Claude
+ *   3. Analiza INE + comprobante con Claude visión
+ *   4. Valida identidad con Dice coefficient
+ *   5. Genera contrato Word con docxtemplater
+ *   6. Borra los temporales del bucket
+ *   7. Retorna el .docx como base64
  */
 export async function procesarContratoAction(
-  formData: FormData
+  payload: UrlsPayload
 ): Promise<ResultadoAccion> {
-  // ── 0. Extraer archivos y campos del FormData ──────────────────────────────
-  let actaFile: File,
-    poderFile: File,
-    ineFile: File,
-    comprobanteFile: File,
-    templateFile: File;
-  let monto_credito: string, dias_credito: string;
+  const { urls, paths, monto_credito, dias_credito } = payload;
 
-  try {
-    actaFile        = requerirArchivo(formData, "actaConstitutiva");
-    poderFile       = requerirArchivo(formData, "poderNotarial");
-    ineFile         = requerirArchivo(formData, "ine");
-    comprobanteFile = requerirArchivo(formData, "comprobanteDomicilio");
-    templateFile    = requerirArchivo(formData, "templateContrato");
-
-    monto_credito = (formData.get("monto_credito") as string | null)?.trim() || "0.00";
-    dias_credito  = (formData.get("dias_credito")  as string | null)?.trim() || "15";
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
+  // ── 0. Validación básica del payload ──────────────────────────────────────
+  const camposUrl = Object.entries(urls) as [string, string][];
+  for (const [campo, url] of camposUrl) {
+    if (!url || typeof url !== "string") {
+      return { success: false, error: `URL inválida para el campo "${campo}".` };
+    }
   }
 
-  // Referencia para suprimir warning de variable no usada (poderNotarial se valida
-  // pero su texto se delega a extractorPdf que lee el acta; se incluye para futura extracción)
-  void poderFile;
-
   try {
-    // ── 1. Extraer texto del Acta Constitutiva (sin API) ──────────────────────
-    const actaBuffer = await fileABuffer(actaFile);
+    // ── 1. Descargar buffers en paralelo (I/O concurrente) ────────────────────
+    const [actaBuffer, , templateBuffer] = await Promise.all([
+      urlABuffer(urls.actaConstitutiva),
+      urlABuffer(urls.poderNotarial),   // validado pero no procesado por separado aún
+      urlABuffer(urls.templateContrato),
+    ]);
+
+    const [ineData, comprobanteData] = await Promise.all([
+      urlABase64(urls.ine),
+      urlABase64(urls.comprobanteDomicilio),
+    ]);
+
+    // ── 2. Extraer texto del Acta Constitutiva (sin API) ──────────────────────
     const { denominacion, textoPoderes } = await procesarActaConstitutiva(actaBuffer);
 
     if (!textoPoderes) {
+      await limpiarBucket(paths);
       return {
         success: false,
         error:
@@ -98,54 +165,48 @@ export async function procesarContratoAction(
       };
     }
 
-    // ── 2. Analizar poderes con Claude ────────────────────────────────────────
+    // ── 3. Analizar poderes con Claude ────────────────────────────────────────
     const { apoderados } = await analizarTextoPoderes(textoPoderes);
 
     if (apoderados.length === 0) {
+      await limpiarBucket(paths);
       return {
         success: false,
         error:
-          "No se encontraron apoderados en el fragmento de poderes extraído. Revisa que el Acta incluya la cláusula de Administración o Poderes.",
+          "No se encontraron apoderados en el fragmento de poderes. Verifica que el Acta incluya la cláusula de Administración o Poderes.",
       };
     }
 
-    // ── 3. Analizar documentos de identidad con Claude (visión) ───────────────
-    const ineBase64         = await fileABase64(ineFile);
-    const comprobanteBase64 = await fileABase64(comprobanteFile);
-
-    const ineMime = (ineFile.type || "image/jpeg") as
-      "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-    const comprobanteMime = (comprobanteFile.type || "image/jpeg") as
-      "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-
+    // ── 4. Analizar documentos de identidad con Claude visión ─────────────────
     const { nombre_completo_ine, curp: _curp, domicilio_completo } =
       await analizarDocumentosIdentidad(
-        ineBase64,
-        comprobanteBase64,
-        ineMime,
-        comprobanteMime
+        ineData.base64,
+        comprobanteData.base64,
+        ineData.mime,
+        comprobanteData.mime
       );
 
-    // ── 4. Validar identidad (Dice coefficient, sin API) ──────────────────────
+    // ── 5. Validar identidad (Dice, sin API) ──────────────────────────────────
     const validacion = validarIdentidad(nombre_completo_ine, apoderados);
 
     if (validacion.estatus === "RECHAZADO") {
+      await limpiarBucket(paths);
       return {
         success: false,
-        error: `Identidad rechazada. El nombre del INE ("${nombre_completo_ine}") no coincide con ningún apoderado del acta (similitud: ${(validacion.rating * 100).toFixed(1)}%). Verifica los documentos.`,
+        error: `Identidad rechazada. El nombre del INE ("${nombre_completo_ine}") no coincide con ningún apoderado del acta (similitud: ${(validacion.rating * 100).toFixed(1)}%).`,
       };
     }
 
     if (validacion.estatus === "REVISIÓN MANUAL") {
+      await limpiarBucket(paths);
       return {
         success: false,
-        error: `Revisión manual requerida. Similitud del nombre: ${(validacion.rating * 100).toFixed(1)}%. Posible coincidencia: "${validacion.apoderado?.nombre_completo ?? "N/A"}". Un operador debe verificar manualmente.`,
+        error: `Revisión manual requerida (similitud ${(validacion.rating * 100).toFixed(1)}%). Posible coincidencia: "${validacion.apoderado?.nombre_completo ?? "N/A"}".`,
       };
     }
 
-    // ── 5. Generar contrato Word ───────────────────────────────────────────────
+    // ── 6. Generar contrato Word ───────────────────────────────────────────────
     const apoderadoValidado = validacion.apoderado!;
-    const templateBuffer    = await fileABuffer(templateFile);
     const facultades_texto  = apoderadoValidado.facultades.join(", ");
 
     const wordBuffer = generarContratoWord(templateBuffer, {
@@ -153,19 +214,22 @@ export async function procesarContratoAction(
       nombre_apoderado:    nombre_completo_ine,
       domicilio:           domicilio_completo,
       facultades_texto,
-      monto_credito,
-      dias_credito,
+      monto_credito:  monto_credito  || "0.00",
+      dias_credito:   dias_credito   || "15",
     });
 
-    // ── 6. Retornar el .docx como base64 ──────────────────────────────────────
-    // Server Actions no pueden retornar un Response HTTP binario;
-    // convertimos a base64 para que el cliente lo reconstruya como Blob.
+    // ── 7. Limpiar temporales (best-effort, no bloquea la respuesta) ──────────
+    await limpiarBucket(paths);
+
+    // ── 8. Retornar .docx como base64 ─────────────────────────────────────────
     const fileBase64 = wordBuffer.toString("base64");
-    const fileName   = `contrato_${denominacion.replace(/\s+/g, "_") || "generado"}.docx`;
+    const fileName   = `contrato_${(denominacion || "generado").replace(/\s+/g, "_")}.docx`;
 
     return { success: true, fileBase64, fileName };
   } catch (e) {
     console.error("[procesarContratoAction] Error interno:", e);
+    // Intenta limpiar incluso en caso de error
+    await limpiarBucket(paths).catch(() => null);
     return {
       success: false,
       error: `Error interno: ${(e as Error).message}`,

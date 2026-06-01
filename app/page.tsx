@@ -2,7 +2,8 @@
 
 import { useState, useRef, DragEvent, ChangeEvent, useEffect } from "react";
 import { saveAs } from "file-saver";
-import { procesarContratoAction } from "./actions";
+import { createClient } from "@supabase/supabase-js";
+import { procesarContratoAction, type UrlsPayload } from "./actions";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -206,33 +207,83 @@ export default function Home() {
     setProcessing(true);
     setToast(null);
 
+    // ── Pasos de progreso visible ────────────────────────────────────────────
     const steps = [
+      "Subiendo documentos…",
       "Extrayendo texto del Acta…",
       "Analizando poderes con IA…",
-      "Procesando documentos de identidad…",
-      "Validando identidad…",
+      "Procesando identidad…",
       "Generando contrato…",
     ];
-
-    // Simula progreso visible mientras la Server Action trabaja
     let i = 0;
     setStep(steps[0]);
     const interval = setInterval(() => {
       i = Math.min(i + 1, steps.length - 1);
       setStep(steps[i]);
-    }, 3500);
+    }, 4000);
 
     try {
-      const form = new FormData();
-      form.append("actaConstitutiva",    files.actaConstitutiva!);
-      form.append("poderNotarial",       files.poderNotarial!);
-      form.append("ine",                 files.ine!);
-      form.append("comprobanteDomicilio",files.comprobanteDomicilio!);
-      form.append("templateContrato",    files.templateContrato!);
-      form.append("monto_credito",       montoCredito);
-      form.append("dias_credito",        diasCredito);
+      // ── 1. Inicializar cliente Supabase (clave pública, solo anon) ───────────
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+      const supabase    = createClient(supabaseUrl, supabaseKey);
 
-      const resultado = await procesarContratoAction(form);
+      const BUCKET = "temporales";
+      // Prefijo único por sesión para evitar colisiones entre usuarios concurrentes
+      const sesion = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      // ── 2. Subir los 5 archivos directamente desde el navegador ─────────────
+      // Cada upload es un multipart directo a Supabase Storage (bypassea el servidor de Next.js)
+      type FileEntry = { key: keyof typeof files; nombre: string };
+      const entradas: FileEntry[] = [
+        { key: "actaConstitutiva",    nombre: "acta" },
+        { key: "poderNotarial",       nombre: "poder" },
+        { key: "ine",                 nombre: "ine" },
+        { key: "comprobanteDomicilio",nombre: "comprobante" },
+        { key: "templateContrato",    nombre: "template" },
+      ];
+
+      const subidas = await Promise.all(
+        entradas.map(async ({ key, nombre }) => {
+          const archivo   = files[key]!;
+          const extension = archivo.name.split(".").pop() ?? "bin";
+          const path      = `${sesion}/${nombre}.${extension}`;
+
+          const { error } = await supabase.storage
+            .from(BUCKET)
+            .upload(path, archivo, { upsert: true });
+
+          if (error) throw new Error(`Error subiendo ${nombre}: ${error.message}`);
+
+          const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+          return { key, path, url: data.publicUrl };
+        })
+      );
+
+      // ── 3. Construir el payload de URLs para la Server Action ────────────────
+      const byKey = Object.fromEntries(subidas.map((s) => [s.key, s]));
+
+      const payload: UrlsPayload = {
+        urls: {
+          actaConstitutiva:    byKey.actaConstitutiva.url,
+          poderNotarial:       byKey.poderNotarial.url,
+          ine:                 byKey.ine.url,
+          comprobanteDomicilio:byKey.comprobanteDomicilio.url,
+          templateContrato:    byKey.templateContrato.url,
+        },
+        paths: {
+          actaConstitutiva:    byKey.actaConstitutiva.path,
+          poderNotarial:       byKey.poderNotarial.path,
+          ine:                 byKey.ine.path,
+          comprobanteDomicilio:byKey.comprobanteDomicilio.path,
+          templateContrato:    byKey.templateContrato.path,
+        },
+        monto_credito: montoCredito,
+        dias_credito:  diasCredito,
+      };
+
+      // ── 4. Llamar al Server Action con el payload JSON ligero ────────────────
+      const resultado = await procesarContratoAction(payload);
 
       clearInterval(interval);
 
@@ -241,11 +292,11 @@ export default function Home() {
         return;
       }
 
-      // Reconstruye el Blob a partir del base64 que devuelve la Server Action
-      const byteChars   = atob(resultado.fileBase64);
-      const byteNums    = Array.from(byteChars, (c) => c.charCodeAt(0));
-      const byteArray   = new Uint8Array(byteNums);
-      const blob        = new Blob([byteArray], {
+      // ── 5. Reconstruir el Blob y descargar con file-saver ────────────────────
+      const byteChars = atob(resultado.fileBase64);
+      const byteArray = new Uint8Array(byteChars.length);
+      for (let j = 0; j < byteChars.length; j++) byteArray[j] = byteChars.charCodeAt(j);
+      const blob = new Blob([byteArray], {
         type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       });
 
@@ -253,7 +304,7 @@ export default function Home() {
       setToast({ mensaje: `Contrato generado: ${resultado.fileName}`, tipo: "ok" });
     } catch (e) {
       clearInterval(interval);
-      setToast({ mensaje: `Error inesperado: ${(e as Error).message}`, tipo: "error" });
+      setToast({ mensaje: `Error: ${(e as Error).message}`, tipo: "error" });
     } finally {
       setProcessing(false);
       setStep("");
