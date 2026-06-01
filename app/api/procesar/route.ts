@@ -4,8 +4,18 @@ import { analizarTextoPoderes, analizarDocumentosIdentidad } from "@/lib/agenteC
 import { validarIdentidad } from "@/lib/validador";
 import { generarContratoWord } from "@/lib/generadorWord";
 
-// Next.js App Router: deshabilita el body parser por defecto para recibir FormData
+// Next.js App Router — configuración del segmento de ruta
 export const runtime = "nodejs";
+
+// Aumenta el límite de body a 50 MB para aceptar PDFs grandes (Actas Constitutivas)
+// más imágenes de INE/comprobante en un mismo FormData.
+// En App Router, Route Handlers leen el body como stream de Node.js sin body-parser,
+// por lo que este límite se aplica a nivel del segmento mediante la API oficial de Next.js.
+export const maxDuration = 60; // segundos — necesario para llamadas a Claude API
+
+// Segmento de configuración compatible con App Router (Next.js 13.4+)
+// Referencia: https://nextjs.org/docs/app/api-reference/file-conventions/route-segment-config
+export const dynamic = "force-dynamic";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
