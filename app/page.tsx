@@ -1,18 +1,21 @@
 "use client";
 
 import { useState, useRef, DragEvent, ChangeEvent } from "react";
+import { saveAs } from "file-saver";
 
 type DocumentKey =
   | "actaConstitutiva"
   | "poderNotarial"
   | "ine"
-  | "comprobanteDomicilio";
+  | "comprobanteDomicilio"
+  | "templateContrato";
 
 interface DocumentSlot {
   key: DocumentKey;
   label: string;
   description: string;
   icon: React.ReactNode;
+  accept?: string;
 }
 
 interface FileState {
@@ -20,6 +23,7 @@ interface FileState {
   poderNotarial: File | null;
   ine: File | null;
   comprobanteDomicilio: File | null;
+  templateContrato: File | null;
 }
 
 const FileIcon = () => (
@@ -56,30 +60,41 @@ const CheckIcon = () => (
   </svg>
 );
 
+const TemplateIcon = () => (
+  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+  </svg>
+);
+
 const DOCUMENT_SLOTS: DocumentSlot[] = [
   {
     key: "actaConstitutiva",
     label: "Acta Constitutiva",
     description: "Documento de constitución de la empresa",
     icon: <BuildingIcon />,
+    accept: ".pdf",
   },
   {
     key: "poderNotarial",
     label: "Poder Notarial",
     description: "Instrumento que acredita la representación legal",
     icon: <FileIcon />,
+    accept: ".pdf",
   },
   {
     key: "ine",
     label: "INE",
     description: "Identificación oficial del representante",
     icon: <IdCardIcon />,
+    accept: ".pdf,.jpg,.jpeg,.png",
   },
   {
     key: "comprobanteDomicilio",
     label: "Comprobante de Domicilio",
     description: "No mayor a 3 meses de antigüedad",
     icon: <HomeIcon />,
+    accept: ".pdf,.jpg,.jpeg,.png",
   },
 ];
 
@@ -87,10 +102,12 @@ function DropZone({
   slot,
   file,
   onFile,
+  variant = "normal",
 }: {
   slot: DocumentSlot;
   file: File | null;
   onFile: (key: DocumentKey, file: File) => void;
+  variant?: "normal" | "template";
 }) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -108,6 +125,7 @@ function DropZone({
   };
 
   const isLoaded = !!file;
+  const isTemplate = variant === "template";
 
   return (
     <div
@@ -118,9 +136,15 @@ function DropZone({
       className={`
         relative group cursor-pointer rounded-xl border-2 transition-all duration-200 p-6
         ${isLoaded
-          ? "border-slate-600 bg-slate-800/60"
+          ? isTemplate
+            ? "border-violet-600 bg-violet-900/20"
+            : "border-slate-600 bg-slate-800/60"
           : dragging
-          ? "border-blue-400 bg-blue-950/30 scale-[1.02]"
+          ? isTemplate
+            ? "border-violet-400 bg-violet-950/30 scale-[1.02]"
+            : "border-blue-400 bg-blue-950/30 scale-[1.02]"
+          : isTemplate
+          ? "border-violet-800/60 bg-violet-900/10 hover:border-violet-600 hover:bg-violet-900/20"
           : "border-slate-700 bg-slate-800/30 hover:border-slate-500 hover:bg-slate-800/50"
         }
       `}
@@ -128,13 +152,17 @@ function DropZone({
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,.jpg,.jpeg,.png"
+        accept={slot.accept ?? ".pdf,.jpg,.jpeg,.png"}
         className="hidden"
         onChange={handleChange}
       />
 
       {isLoaded && (
-        <span className="absolute top-3 right-3 flex items-center gap-1 text-xs font-medium text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full">
+        <span className={`absolute top-3 right-3 flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
+          isTemplate
+            ? "text-violet-300 bg-violet-400/10"
+            : "text-emerald-400 bg-emerald-400/10"
+        }`}>
           <CheckIcon />
           Cargado
         </span>
@@ -143,7 +171,11 @@ function DropZone({
       <div className="flex items-start gap-4">
         <div className={`shrink-0 p-2 rounded-lg transition-colors ${
           isLoaded
-            ? "text-emerald-400 bg-emerald-400/10"
+            ? isTemplate
+              ? "text-violet-400 bg-violet-400/10"
+              : "text-emerald-400 bg-emerald-400/10"
+            : isTemplate
+            ? "text-violet-500/70 bg-violet-900/30 group-hover:text-violet-400 group-hover:bg-violet-400/10"
             : "text-slate-400 bg-slate-700/50 group-hover:text-blue-400 group-hover:bg-blue-400/10"
         }`}>
           {slot.icon}
@@ -156,10 +188,12 @@ function DropZone({
           {isLoaded ? (
             <p className="text-xs text-slate-400 truncate max-w-[200px]">{file.name}</p>
           ) : (
-            <p className="text-xs text-slate-500">{slot.description}</p>
+            <p className={`text-xs ${isTemplate ? "text-slate-500" : "text-slate-500"}`}>{slot.description}</p>
           )}
           {!isLoaded && (
-            <p className="text-xs text-blue-400/70 mt-2">Arrastra o haz clic para seleccionar</p>
+            <p className={`text-xs mt-2 ${isTemplate ? "text-violet-400/70" : "text-blue-400/70"}`}>
+              Arrastra o haz clic para seleccionar
+            </p>
           )}
         </div>
       </div>
@@ -167,15 +201,18 @@ function DropZone({
   );
 }
 
+type StatusVariant = "info" | "success" | "error" | "warning";
+
 export default function Home() {
   const [files, setFiles] = useState<FileState>({
     actaConstitutiva: null,
     poderNotarial: null,
     ine: null,
     comprobanteDomicilio: null,
+    templateContrato: null,
   });
   const [processing, setProcessing] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ mensaje: string; variant: StatusVariant } | null>(null);
 
   const handleFile = (key: DocumentKey, file: File) => {
     setFiles((prev) => ({ ...prev, [key]: file }));
@@ -183,19 +220,74 @@ export default function Home() {
   };
 
   const loadedCount = Object.values(files).filter(Boolean).length;
-  const allLoaded = loadedCount === 4;
+  const allLoaded = loadedCount === 5;
 
   const handleSubmit = async () => {
     if (!allLoaded) return;
     setProcessing(true);
-    setStatus("Procesando documentos…");
-    await new Promise((r) => setTimeout(r, 2000));
-    setStatus("Documentos recibidos correctamente. La generación del contrato estará disponible en breve.");
-    setProcessing(false);
+    setStatus({ mensaje: "Extrayendo texto del Acta Constitutiva…", variant: "info" });
+
+    try {
+      // Construye el FormData con los 5 archivos
+      const form = new FormData();
+      form.append("actaConstitutiva",    files.actaConstitutiva!);
+      form.append("poderNotarial",       files.poderNotarial!);
+      form.append("ine",                 files.ine!);
+      form.append("comprobanteDomicilio",files.comprobanteDomicilio!);
+      form.append("templateContrato",    files.templateContrato!);
+
+      setStatus({ mensaje: "Analizando poderes e identidad con IA…", variant: "info" });
+
+      const res = await fetch("/api/procesar", { method: "POST", body: form });
+
+      if (!res.ok) {
+        // El servidor devuelve JSON con { error, detalle? }
+        const payload = await res.json().catch(() => ({ error: "Error desconocido del servidor." }));
+
+        // 422 = revisión manual requerida (no es un error técnico, es un resultado de negocio)
+        if (res.status === 422) {
+          setStatus({
+            mensaje: `${payload.error} ${payload.detalle ?? ""}`.trim(),
+            variant: "warning",
+          });
+        } else {
+          setStatus({ mensaje: payload.error ?? "Ocurrió un error al procesar.", variant: "error" });
+        }
+        return;
+      }
+
+      // Respuesta exitosa: el servidor devuelve el .docx como binario
+      const blob = await res.blob();
+      // Extrae el nombre de archivo sugerido por el servidor desde el header
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const nombreMatch  = disposition.match(/filename="([^"]+)"/);
+      const nombreArchivo = nombreMatch?.[1] ?? "contrato_generado.docx";
+
+      // file-saver inicia la descarga en el navegador del usuario
+      saveAs(blob, nombreArchivo);
+
+      setStatus({
+        mensaje: `¡Contrato generado y descargado correctamente! (${nombreArchivo})`,
+        variant: "success",
+      });
+    } catch (e) {
+      setStatus({
+        mensaje: `Error de red o inesperado: ${(e as Error).message}`,
+        variant: "error",
+      });
+    } finally {
+      setProcessing(false);
+    }
   };
 
   const handleReset = () => {
-    setFiles({ actaConstitutiva: null, poderNotarial: null, ine: null, comprobanteDomicilio: null });
+    setFiles({
+      actaConstitutiva: null,
+      poderNotarial: null,
+      ine: null,
+      comprobanteDomicilio: null,
+      templateContrato: null,
+    });
     setStatus(null);
   };
 
@@ -238,34 +330,76 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Progress bar */}
+        {/* Progress bar — sobre 5 archivos */}
         <div className="flex items-center gap-3 mb-8">
           <div className="flex-1 bg-slate-800 rounded-full h-1.5">
             <div
-              className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
-              style={{ width: `${(loadedCount / 4) * 100}%` }}
+              className={`h-1.5 rounded-full transition-all duration-500 ${
+                allLoaded ? "bg-emerald-500" : "bg-blue-500"
+              }`}
+              style={{ width: `${(loadedCount / 5) * 100}%` }}
             />
           </div>
           <span className="text-xs text-slate-400 whitespace-nowrap font-mono">
-            {loadedCount} / 4 documentos
+            {loadedCount} / 5 archivos
           </span>
         </div>
 
-        {/* Upload grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+        {/* Grid de 4 documentos principales */}
+        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3">
+          Documentos societarios y de identidad
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           {DOCUMENT_SLOTS.map((slot) => (
             <DropZone key={slot.key} slot={slot} file={files[slot.key]} onFile={handleFile} />
           ))}
         </div>
 
+        {/* Zona de plantilla — ancho completo, visualmente diferenciada */}
+        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3">
+          Plantilla del contrato
+        </p>
+        <div className="mb-8">
+          <DropZone
+            slot={{
+              key: "templateContrato",
+              label: "Plantilla de Contrato (.docx)",
+              description: "Archivo Word con placeholders {denominacion_social}, {nombre_apoderado}, {domicilio}, {facultades_texto}",
+              icon: <TemplateIcon />,
+              accept: ".docx",
+            }}
+            file={files.templateContrato}
+            onFile={handleFile}
+            variant="template"
+          />
+        </div>
+
         <p className="text-xs text-slate-600 mb-8 text-center">
-          Formatos aceptados: PDF, JPG, PNG · Tamaño máximo recomendado: 10 MB por archivo
+          Documentos: PDF, JPG, PNG · Plantilla: .docx · Máximo recomendado: 10 MB por archivo
         </p>
 
-        {/* Status */}
+        {/* Status con variantes de color */}
         {status && (
-          <div className="mb-6 rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3">
-            <p className="text-sm text-blue-300">{status}</p>
+          <div className={`mb-6 rounded-lg border px-4 py-3 ${
+            status.variant === "success"
+              ? "border-emerald-500/20 bg-emerald-500/5"
+              : status.variant === "error"
+              ? "border-red-500/20 bg-red-500/5"
+              : status.variant === "warning"
+              ? "border-amber-500/20 bg-amber-500/5"
+              : "border-blue-500/20 bg-blue-500/5"
+          }`}>
+            <p className={`text-sm ${
+              status.variant === "success"
+                ? "text-emerald-300"
+                : status.variant === "error"
+                ? "text-red-300"
+                : status.variant === "warning"
+                ? "text-amber-300"
+                : "text-blue-300"
+            }`}>
+              {status.mensaje}
+            </p>
           </div>
         )}
 
@@ -288,7 +422,7 @@ export default function Home() {
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
               </svg>
             )}
-            {processing ? "Procesando…" : "Procesar documentos"}
+            {processing ? "Procesando…" : "Generar contrato"}
           </button>
 
           {loadedCount > 0 && !processing && (
