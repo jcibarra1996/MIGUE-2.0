@@ -211,6 +211,8 @@ export default function Home() {
     comprobanteDomicilio: null,
     templateContrato: null,
   });
+  const [montoCredito, setMontoCredito] = useState("");
+  const [diasCredito, setDiasCredito] = useState("15");
   const [processing, setProcessing] = useState(false);
   const [status, setStatus] = useState<{ mensaje: string; variant: StatusVariant } | null>(null);
 
@@ -235,6 +237,8 @@ export default function Home() {
       form.append("ine",                 files.ine!);
       form.append("comprobanteDomicilio",files.comprobanteDomicilio!);
       form.append("templateContrato",    files.templateContrato!);
+      form.append("monto_credito",        montoCredito);
+      form.append("dias_credito",         diasCredito);
 
       setStatus({ mensaje: "Analizando poderes e identidad con IA…", variant: "info" });
 
@@ -364,7 +368,7 @@ export default function Home() {
             slot={{
               key: "templateContrato",
               label: "Plantilla de Contrato (.docx)",
-              description: "Archivo Word con placeholders {denominacion_social}, {nombre_apoderado}, {domicilio}, {facultades_texto}",
+              description: "Placeholders: {denominacion_social} {nombre_apoderado} {domicilio} {facultades_texto} {monto_credito} {dias_credito}",
               icon: <TemplateIcon />,
               accept: ".docx",
             }}
@@ -377,6 +381,45 @@ export default function Home() {
         <p className="text-xs text-slate-600 mb-8 text-center">
           Documentos: PDF, JPG, PNG · Plantilla: .docx · Máximo recomendado: 10 MB por archivo
         </p>
+
+        {/* Panel de condiciones de crédito */}
+        <div className="mb-8 rounded-xl border border-slate-700 bg-slate-800/30 p-6">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-4">
+            Condiciones de crédito
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Monto de crédito */}
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Monto de crédito autorizado
+              </label>
+              <input
+                type="text"
+                value={montoCredito}
+                onChange={(e) => setMontoCredito(e.target.value)}
+                placeholder="Ej. 500,000.00"
+                className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+              />
+            </div>
+
+            {/* Días de crédito */}
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Días de crédito autorizados
+              </label>
+              <select
+                value={diasCredito}
+                onChange={(e) => setDiasCredito(e.target.value)}
+                className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors appearance-none cursor-pointer"
+              >
+                <option value="15">15 días</option>
+                <option value="30">30 días</option>
+                <option value="45">45 días</option>
+                <option value="60">60 días</option>
+              </select>
+            </div>
+          </div>
+        </div>
 
         {/* Status con variantes de color */}
         {status && (

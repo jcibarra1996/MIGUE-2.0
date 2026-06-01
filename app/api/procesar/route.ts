@@ -56,14 +56,19 @@ export async function POST(req: NextRequest) {
     return errorJson("No se pudo leer el formulario multipart.", 400);
   }
 
-  // Valida que los 5 archivos estén presentes antes de iniciar el procesamiento
+  // Valida que los 5 archivos estén presentes y extrae los campos de texto
   let actaFile: File, poderFile: File, ineFile: File, comprobanteFile: File, templateFile: File;
+  let monto_credito: string, dias_credito: string;
   try {
     actaFile        = requerirArchivo(form, "actaConstitutiva");
     poderFile       = requerirArchivo(form, "poderNotarial");
     ineFile         = requerirArchivo(form, "ine");
     comprobanteFile = requerirArchivo(form, "comprobanteDomicilio");
     templateFile    = requerirArchivo(form, "templateContrato");
+
+    // Campos comerciales — se envían como strings desde el formulario
+    monto_credito = (form.get("monto_credito") as string | null)?.trim() || "0.00";
+    dias_credito  = (form.get("dias_credito")  as string | null)?.trim() || "15";
   } catch (e) {
     return errorJson((e as Error).message, 400);
   }
@@ -145,6 +150,9 @@ export async function POST(req: NextRequest) {
       domicilio: domicilio_completo,
       // Facultades del apoderado validado, separadas por coma
       facultades_texto,
+      // Condiciones comerciales capturadas en el formulario
+      monto_credito,
+      dias_credito,
     });
 
     // ── 6. Devolver el .docx como descarga binaria ────────────────────────────

@@ -13,6 +13,10 @@ export interface DatosContrato {
   domicilio: string;
   // Ej. "Pleitos y Cobranzas, Actos de Administración, Actos de Dominio"
   facultades_texto: string;
+  // Ej. "500,000.00" — se inserta tal cual en el placeholder {monto_credito}
+  monto_credito: string;
+  // Ej. "30" — días de crédito autorizados; placeholder {dias_credito}
+  dias_credito: string;
 }
 
 // ─── Función principal exportada ──────────────────────────────────────────────
@@ -30,6 +34,8 @@ export interface DatosContrato {
  *   {nombre_apoderado}     → Nombre completo del apoderado validado
  *   {domicilio}            → Domicilio del comprobante
  *   {facultades_texto}     → Facultades unidas por coma
+ *   {monto_credito}        → Monto de crédito autorizado (ej. "500,000.00")
+ *   {dias_credito}         → Días de crédito autorizados (ej. "30")
  */
 export function generarContratoWord(
   templateBuffer: Buffer,
