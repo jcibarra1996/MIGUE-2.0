@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useRef, DragEvent, ChangeEvent } from "react";
+import { useState, useRef, DragEvent, ChangeEvent, useEffect } from "react";
 import { saveAs } from "file-saver";
+import { procesarContratoAction } from "./actions";
+
+// ─── Tipos ────────────────────────────────────────────────────────────────────
 
 type DocumentKey =
   | "actaConstitutiva"
@@ -14,8 +17,7 @@ interface DocumentSlot {
   key: DocumentKey;
   label: string;
   description: string;
-  icon: React.ReactNode;
-  accept?: string;
+  accept: string;
 }
 
 interface FileState {
@@ -26,182 +28,142 @@ interface FileState {
   templateContrato: File | null;
 }
 
-const FileIcon = () => (
-  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-  </svg>
-);
+interface Toast {
+  mensaje: string;
+  tipo: "ok" | "error" | "info";
+}
 
-const BuildingIcon = () => (
-  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-      d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-  </svg>
-);
+// ─── Constantes ───────────────────────────────────────────────────────────────
 
-const IdCardIcon = () => (
-  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-      d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c0 1.306.835 2.417 2 2.829" />
-  </svg>
-);
-
-const HomeIcon = () => (
-  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-      d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-  </svg>
-);
-
-const CheckIcon = () => (
-  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-  </svg>
-);
-
-const TemplateIcon = () => (
-  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-  </svg>
-);
-
-const DOCUMENT_SLOTS: DocumentSlot[] = [
+const SLOTS: DocumentSlot[] = [
   {
     key: "actaConstitutiva",
     label: "Acta Constitutiva",
-    description: "Documento de constitución de la empresa",
-    icon: <BuildingIcon />,
+    description: "PDF constitutivo de la empresa",
     accept: ".pdf",
   },
   {
     key: "poderNotarial",
     label: "Poder Notarial",
-    description: "Instrumento que acredita la representación legal",
-    icon: <FileIcon />,
+    description: "Instrumento de representación legal",
     accept: ".pdf",
   },
   {
     key: "ine",
-    label: "INE",
-    description: "Identificación oficial del representante",
-    icon: <IdCardIcon />,
+    label: "INE del Representante",
+    description: "Identificación oficial vigente",
     accept: ".pdf,.jpg,.jpeg,.png",
   },
   {
     key: "comprobanteDomicilio",
     label: "Comprobante de Domicilio",
-    description: "No mayor a 3 meses de antigüedad",
-    icon: <HomeIcon />,
+    description: "Máximo 3 meses de antigüedad",
     accept: ".pdf,.jpg,.jpeg,.png",
   },
 ];
+
+// ─── Íconos inline (sin dependencia extra) ───────────────────────────────────
+
+function IconUpload({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+    </svg>
+  );
+}
+
+function IconCheck({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function IconSpinner({ className }: { className?: string }) {
+  return (
+    <svg className={`animate-spin ${className}`} fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+    </svg>
+  );
+}
+
+// ─── Componente DropZone ──────────────────────────────────────────────────────
 
 function DropZone({
   slot,
   file,
   onFile,
-  variant = "normal",
 }: {
   slot: DocumentSlot;
   file: File | null;
   onFile: (key: DocumentKey, file: File) => void;
-  variant?: "normal" | "template";
 }) {
-  const [dragging, setDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
 
-  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+  const pick = (f: File) => onFile(slot.key, f);
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    setDragging(false);
-    const dropped = e.dataTransfer.files[0];
-    if (dropped) onFile(slot.key, dropped);
+    setOver(false);
+    const f = e.dataTransfer.files[0];
+    if (f) pick(f);
+  };
+  const onChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) pick(f);
   };
 
-  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0];
-    if (selected) onFile(slot.key, selected);
-  };
-
-  const isLoaded = !!file;
-  const isTemplate = variant === "template";
+  const loaded = !!file;
 
   return (
     <div
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={handleDrop}
-      onClick={() => inputRef.current?.click()}
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={onDrop}
+      onClick={() => ref.current?.click()}
       className={`
-        relative group cursor-pointer rounded-xl border-2 transition-all duration-200 p-6
-        ${isLoaded
-          ? isTemplate
-            ? "border-violet-600 bg-violet-900/20"
-            : "border-slate-600 bg-slate-800/60"
-          : dragging
-          ? isTemplate
-            ? "border-violet-400 bg-violet-950/30 scale-[1.02]"
-            : "border-blue-400 bg-blue-950/30 scale-[1.02]"
-          : isTemplate
-          ? "border-violet-800/60 bg-violet-900/10 hover:border-violet-600 hover:bg-violet-900/20"
-          : "border-slate-700 bg-slate-800/30 hover:border-slate-500 hover:bg-slate-800/50"
+        relative cursor-pointer rounded-xl border-2 border-dashed p-5 transition-all duration-150 select-none
+        ${loaded
+          ? "border-gray-300 bg-gray-50"
+          : over
+          ? "border-gray-400 bg-gray-100 scale-[1.01]"
+          : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50"
         }
       `}
     >
-      <input
-        ref={inputRef}
-        type="file"
-        accept={slot.accept ?? ".pdf,.jpg,.jpeg,.png"}
-        className="hidden"
-        onChange={handleChange}
-      />
+      <input ref={ref} type="file" accept={slot.accept} className="hidden" onChange={onChange} />
 
-      {isLoaded && (
-        <span className={`absolute top-3 right-3 flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
-          isTemplate
-            ? "text-violet-300 bg-violet-400/10"
-            : "text-emerald-400 bg-emerald-400/10"
+      <div className="flex items-center gap-3">
+        <div className={`flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${
+          loaded ? "bg-gray-900" : "bg-gray-100"
         }`}>
-          <CheckIcon />
-          Cargado
-        </span>
-      )}
-
-      <div className="flex items-start gap-4">
-        <div className={`shrink-0 p-2 rounded-lg transition-colors ${
-          isLoaded
-            ? isTemplate
-              ? "text-violet-400 bg-violet-400/10"
-              : "text-emerald-400 bg-emerald-400/10"
-            : isTemplate
-            ? "text-violet-500/70 bg-violet-900/30 group-hover:text-violet-400 group-hover:bg-violet-400/10"
-            : "text-slate-400 bg-slate-700/50 group-hover:text-blue-400 group-hover:bg-blue-400/10"
-        }`}>
-          {slot.icon}
+          {loaded
+            ? <IconCheck className="w-4 h-4 text-white" />
+            : <IconUpload className="w-4 h-4 text-gray-400" />
+          }
         </div>
 
-        <div className="min-w-0">
-          <p className={`text-sm font-semibold mb-0.5 ${isLoaded ? "text-slate-200" : "text-slate-300"}`}>
-            {slot.label}
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-gray-900 truncate">{slot.label}</p>
+          <p className="text-xs text-gray-400 truncate mt-0.5">
+            {loaded ? file!.name : slot.description}
           </p>
-          {isLoaded ? (
-            <p className="text-xs text-slate-400 truncate max-w-[200px]">{file.name}</p>
-          ) : (
-            <p className={`text-xs ${isTemplate ? "text-slate-500" : "text-slate-500"}`}>{slot.description}</p>
-          )}
-          {!isLoaded && (
-            <p className={`text-xs mt-2 ${isTemplate ? "text-violet-400/70" : "text-blue-400/70"}`}>
-              Arrastra o haz clic para seleccionar
-            </p>
-          )}
         </div>
+
+        {loaded && (
+          <span className="text-xs text-gray-400 font-mono whitespace-nowrap">
+            {(file!.size / 1024).toFixed(0)} KB
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
-type StatusVariant = "info" | "success" | "error" | "warning";
+// ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function Home() {
   const [files, setFiles] = useState<FileState>({
@@ -214,183 +176,173 @@ export default function Home() {
   const [montoCredito, setMontoCredito] = useState("");
   const [diasCredito, setDiasCredito] = useState("15");
   const [processing, setProcessing] = useState(false);
-  const [status, setStatus] = useState<{ mensaje: string; variant: StatusVariant } | null>(null);
+  const [step, setStep] = useState("");
+  const [toast, setToast] = useState<Toast | null>(null);
+
+  // Auto-oculta el toast a los 6 segundos
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const handleFile = (key: DocumentKey, file: File) => {
     setFiles((prev) => ({ ...prev, [key]: file }));
-    setStatus(null);
   };
 
-  const loadedCount = Object.values(files).filter(Boolean).length;
-  const allLoaded = loadedCount === 5;
+  const loaded = Object.values(files).filter(Boolean).length;
+  const allLoaded = loaded === 5;
+
+  const handleReset = () => {
+    setFiles({ actaConstitutiva: null, poderNotarial: null, ine: null, comprobanteDomicilio: null, templateContrato: null });
+    setMontoCredito("");
+    setDiasCredito("15");
+    setStep("");
+  };
 
   const handleSubmit = async () => {
-    if (!allLoaded) return;
+    if (!allLoaded || processing) return;
+
     setProcessing(true);
-    setStatus({ mensaje: "Extrayendo texto del Acta Constitutiva…", variant: "info" });
+    setToast(null);
+
+    const steps = [
+      "Extrayendo texto del Acta…",
+      "Analizando poderes con IA…",
+      "Procesando documentos de identidad…",
+      "Validando identidad…",
+      "Generando contrato…",
+    ];
+
+    // Simula progreso visible mientras la Server Action trabaja
+    let i = 0;
+    setStep(steps[0]);
+    const interval = setInterval(() => {
+      i = Math.min(i + 1, steps.length - 1);
+      setStep(steps[i]);
+    }, 3500);
 
     try {
-      // Construye el FormData con los 5 archivos
       const form = new FormData();
       form.append("actaConstitutiva",    files.actaConstitutiva!);
       form.append("poderNotarial",       files.poderNotarial!);
       form.append("ine",                 files.ine!);
       form.append("comprobanteDomicilio",files.comprobanteDomicilio!);
       form.append("templateContrato",    files.templateContrato!);
-      form.append("monto_credito",        montoCredito);
-      form.append("dias_credito",         diasCredito);
+      form.append("monto_credito",       montoCredito);
+      form.append("dias_credito",        diasCredito);
 
-      setStatus({ mensaje: "Analizando poderes e identidad con IA…", variant: "info" });
+      const resultado = await procesarContratoAction(form);
 
-      const res = await fetch("/api/procesar", { method: "POST", body: form });
+      clearInterval(interval);
 
-      if (!res.ok) {
-        // El servidor devuelve JSON con { error, detalle? }
-        const payload = await res.json().catch(() => ({ error: "Error desconocido del servidor." }));
-
-        // 422 = revisión manual requerida (no es un error técnico, es un resultado de negocio)
-        if (res.status === 422) {
-          setStatus({
-            mensaje: `${payload.error} ${payload.detalle ?? ""}`.trim(),
-            variant: "warning",
-          });
-        } else {
-          setStatus({ mensaje: payload.error ?? "Ocurrió un error al procesar.", variant: "error" });
-        }
+      if (!resultado.success) {
+        setToast({ mensaje: resultado.error, tipo: "error" });
         return;
       }
 
-      // Respuesta exitosa: el servidor devuelve el .docx como binario
-      const blob = await res.blob();
-      // Extrae el nombre de archivo sugerido por el servidor desde el header
-      const disposition = res.headers.get("Content-Disposition") ?? "";
-      const nombreMatch  = disposition.match(/filename="([^"]+)"/);
-      const nombreArchivo = nombreMatch?.[1] ?? "contrato_generado.docx";
-
-      // file-saver inicia la descarga en el navegador del usuario
-      saveAs(blob, nombreArchivo);
-
-      setStatus({
-        mensaje: `¡Contrato generado y descargado correctamente! (${nombreArchivo})`,
-        variant: "success",
+      // Reconstruye el Blob a partir del base64 que devuelve la Server Action
+      const byteChars   = atob(resultado.fileBase64);
+      const byteNums    = Array.from(byteChars, (c) => c.charCodeAt(0));
+      const byteArray   = new Uint8Array(byteNums);
+      const blob        = new Blob([byteArray], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       });
+
+      saveAs(blob, resultado.fileName);
+      setToast({ mensaje: `Contrato generado: ${resultado.fileName}`, tipo: "ok" });
     } catch (e) {
-      setStatus({
-        mensaje: `Error de red o inesperado: ${(e as Error).message}`,
-        variant: "error",
-      });
+      clearInterval(interval);
+      setToast({ mensaje: `Error inesperado: ${(e as Error).message}`, tipo: "error" });
     } finally {
       setProcessing(false);
+      setStep("");
     }
   };
 
-  const handleReset = () => {
-    setFiles({
-      actaConstitutiva: null,
-      poderNotarial: null,
-      ine: null,
-      comprobanteDomicilio: null,
-      templateContrato: null,
-    });
-    setStatus(null);
-  };
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      {/* Top bar */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+    <div className="min-h-screen bg-gray-50">
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <header className="bg-white border-b border-gray-200 px-8 py-4">
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-7 h-7 rounded bg-blue-600 flex items-center justify-center">
-              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
-                <path fillRule="evenodd"
-                  d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z"
-                  clipRule="evenodd" />
-              </svg>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="https://i.imgur.com/JJTbpFw.png" alt="Logo" className="h-10 w-auto object-contain" />
+            <div>
+              <p className="font-medium text-gray-900 leading-tight">Migue 2.0</p>
+              <p className="text-xs text-gray-500">Automatización Legal Corporativa</p>
             </div>
-            <span className="text-sm font-semibold tracking-wide text-slate-200">
-              LegalTech <span className="text-slate-500 font-normal">/ Interno</span>
-            </span>
           </div>
-          <span className="text-xs text-slate-500 font-mono">v1.0.0</span>
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-full bg-gray-900 flex items-center justify-center text-white text-xs font-semibold">
+              JC
+            </div>
+            <span className="text-sm text-gray-600">Juan Carlos Ibarra · Legal</span>
+          </div>
         </div>
       </header>
 
-      {/* Main */}
-      <main className="max-w-5xl mx-auto px-6 py-14">
-        {/* Hero */}
-        <div className="mb-12">
-          <div className="inline-flex items-center gap-2 text-xs font-medium text-blue-400 bg-blue-400/10 border border-blue-400/20 px-3 py-1 rounded-full mb-4">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-            Herramienta interna
-          </div>
-          <h1 className="text-4xl font-bold tracking-tight text-slate-50 mb-3">
-            Automatización de Contratos
-          </h1>
-          <p className="text-slate-400 text-base max-w-xl">
-            Carga los documentos societarios y de identidad para generar automáticamente
-            el contrato con los datos extraídos. Procesamiento local y seguro.
+      {/* ── Contenido principal ─────────────────────────────────────────────── */}
+      <main className="max-w-6xl mx-auto px-8 py-6">
+
+        {/* Título de sección */}
+        <div className="mb-6">
+          <h1 className="text-xl font-semibold text-gray-900">Generar contrato</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Carga los documentos requeridos y configura las condiciones de crédito para generar el contrato automáticamente.
           </p>
         </div>
 
-        {/* Progress bar — sobre 5 archivos */}
-        <div className="flex items-center gap-3 mb-8">
-          <div className="flex-1 bg-slate-800 rounded-full h-1.5">
-            <div
-              className={`h-1.5 rounded-full transition-all duration-500 ${
-                allLoaded ? "bg-emerald-500" : "bg-blue-500"
-              }`}
-              style={{ width: `${(loadedCount / 5) * 100}%` }}
+        {/* ── Panel: documentos societarios ──── */}
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4">
+          <div className="px-6 py-4 border-b border-gray-100">
+            <h2 className="text-sm font-medium text-gray-900">Documentos societarios e identidad</h2>
+            <p className="text-xs text-gray-400 mt-0.5">PDF · JPG · PNG — máx. 50 MB por archivo</p>
+          </div>
+          <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-3">
+            {SLOTS.map((slot) => (
+              <DropZone key={slot.key} slot={slot} file={files[slot.key]} onFile={handleFile} />
+            ))}
+          </div>
+        </div>
+
+        {/* ── Panel: plantilla del contrato ──── */}
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4">
+          <div className="px-6 py-4 border-b border-gray-100">
+            <h2 className="text-sm font-medium text-gray-900">Plantilla del contrato</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Archivo .docx con placeholders:{" "}
+              <span className="font-mono">
+                {"{denominacion_social} {nombre_apoderado} {domicilio} {facultades_texto} {monto_credito} {dias_credito}"}
+              </span>
+            </p>
+          </div>
+          <div className="p-6">
+            <DropZone
+              slot={{
+                key: "templateContrato",
+                label: "Plantilla de Contrato (.docx)",
+                description: "Arrastra o haz clic para seleccionar",
+                accept: ".docx",
+              }}
+              file={files.templateContrato}
+              onFile={handleFile}
             />
           </div>
-          <span className="text-xs text-slate-400 whitespace-nowrap font-mono">
-            {loadedCount} / 5 archivos
-          </span>
         </div>
 
-        {/* Grid de 4 documentos principales */}
-        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3">
-          Documentos societarios y de identidad
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          {DOCUMENT_SLOTS.map((slot) => (
-            <DropZone key={slot.key} slot={slot} file={files[slot.key]} onFile={handleFile} />
-          ))}
-        </div>
-
-        {/* Zona de plantilla — ancho completo, visualmente diferenciada */}
-        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3">
-          Plantilla del contrato
-        </p>
-        <div className="mb-8">
-          <DropZone
-            slot={{
-              key: "templateContrato",
-              label: "Plantilla de Contrato (.docx)",
-              description: "Placeholders: {denominacion_social} {nombre_apoderado} {domicilio} {facultades_texto} {monto_credito} {dias_credito}",
-              icon: <TemplateIcon />,
-              accept: ".docx",
-            }}
-            file={files.templateContrato}
-            onFile={handleFile}
-            variant="template"
-          />
-        </div>
-
-        <p className="text-xs text-slate-600 mb-8 text-center">
-          Documentos: PDF, JPG, PNG · Plantilla: .docx · Máximo recomendado: 10 MB por archivo
-        </p>
-
-        {/* Panel de condiciones de crédito */}
-        <div className="mb-8 rounded-xl border border-slate-700 bg-slate-800/30 p-6">
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-4">
-            Condiciones de crédito
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Monto de crédito */}
+        {/* ── Panel: condiciones de crédito ──── */}
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-6">
+          <div className="px-6 py-4 border-b border-gray-100">
+            <h2 className="text-sm font-medium text-gray-900">Condiciones de crédito</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Estos valores se inyectan directamente en el contrato generado</p>
+          </div>
+          <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
                 Monto de crédito autorizado
               </label>
               <input
@@ -398,19 +350,17 @@ export default function Home() {
                 value={montoCredito}
                 onChange={(e) => setMontoCredito(e.target.value)}
                 placeholder="Ej. 500,000.00"
-                className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 transition-colors"
               />
             </div>
-
-            {/* Días de crédito */}
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
                 Días de crédito autorizados
               </label>
               <select
                 value={diasCredito}
                 onChange={(e) => setDiasCredito(e.target.value)}
-                className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors appearance-none cursor-pointer"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 transition-colors appearance-none cursor-pointer"
               >
                 <option value="15">15 días</option>
                 <option value="30">30 días</option>
@@ -421,71 +371,68 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Status con variantes de color */}
-        {status && (
-          <div className={`mb-6 rounded-lg border px-4 py-3 ${
-            status.variant === "success"
-              ? "border-emerald-500/20 bg-emerald-500/5"
-              : status.variant === "error"
-              ? "border-red-500/20 bg-red-500/5"
-              : status.variant === "warning"
-              ? "border-amber-500/20 bg-amber-500/5"
-              : "border-blue-500/20 bg-blue-500/5"
-          }`}>
-            <p className={`text-sm ${
-              status.variant === "success"
-                ? "text-emerald-300"
-                : status.variant === "error"
-                ? "text-red-300"
-                : status.variant === "warning"
-                ? "text-amber-300"
-                : "text-blue-300"
-            }`}>
-              {status.mensaje}
-            </p>
+        {/* ── Barra de progreso + acciones ──── */}
+        <div className="flex items-center justify-between gap-4">
+          {/* Indicador de archivos */}
+          <div className="flex items-center gap-3 flex-1">
+            <div className="flex-1 max-w-xs bg-gray-200 rounded-full h-1">
+              <div
+                className={`h-1 rounded-full transition-all duration-500 ${allLoaded ? "bg-gray-900" : "bg-gray-400"}`}
+                style={{ width: `${(loaded / 5) * 100}%` }}
+              />
+            </div>
+            <span className="text-xs text-gray-500 font-mono whitespace-nowrap">
+              {loaded} / 5 archivos
+            </span>
           </div>
-        )}
 
-        {/* Actions */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleSubmit}
-            disabled={!allLoaded || processing}
-            className={`
-              flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200
-              ${allLoaded && !processing
-                ? "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20"
-                : "bg-slate-800 text-slate-500 cursor-not-allowed"
-              }
-            `}
-          >
-            {processing && (
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-              </svg>
+          {/* Botones */}
+          <div className="flex items-center gap-2">
+            {loaded > 0 && !processing && (
+              <button
+                onClick={handleReset}
+                className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors rounded-lg hover:bg-gray-100"
+              >
+                Limpiar
+              </button>
             )}
-            {processing ? "Procesando…" : "Generar contrato"}
-          </button>
-
-          {loadedCount > 0 && !processing && (
             <button
-              onClick={handleReset}
-              className="px-4 py-2.5 rounded-lg text-sm text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+              onClick={handleSubmit}
+              disabled={!allLoaded || processing}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${
+                allLoaded && !processing
+                  ? "bg-gray-900 text-white hover:bg-gray-700 shadow-sm"
+                  : "bg-gray-200 text-gray-400 cursor-not-allowed"
+              }`}
             >
-              Limpiar
+              {processing && <IconSpinner className="w-4 h-4" />}
+              {processing ? step || "Procesando…" : "Generar contrato"}
             </button>
-          )}
+          </div>
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-800 mt-16">
-        <div className="max-w-5xl mx-auto px-6 py-6 flex items-center justify-between">
-          <p className="text-xs text-slate-600">Uso interno · Datos procesados localmente</p>
-          <p className="text-xs text-slate-600 font-mono">Powered by Next.js · Anthropic SDK</p>
+      {/* ── Toast notificación (esquina inferior derecha) ─────────────────── */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 right-6 flex items-start gap-3 px-4 py-3 rounded-xl shadow-lg text-sm max-w-sm z-50 transition-all ${
+            toast.tipo === "ok"
+              ? "bg-gray-900 text-white"
+              : toast.tipo === "error"
+              ? "bg-red-600 text-white"
+              : "bg-gray-900 text-white"
+          }`}
+        >
+          {toast.tipo === "ok" && <IconCheck className="w-4 h-4 mt-0.5 shrink-0 text-green-400" />}
+          <span>{toast.mensaje}</span>
+          <button
+            onClick={() => setToast(null)}
+            className="ml-1 opacity-60 hover:opacity-100 transition-opacity shrink-0 mt-0.5"
+          >
+            ✕
+          </button>
         </div>
-      </footer>
+      )}
     </div>
   );
 }
