@@ -6,7 +6,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
 
 // "gemini-2.5-flash: rápido, bajo costo, excelente para extracción estructurada y visión.
-const MODELO = ""gemini-2.5-flash;
+onst MODELO = "gemini-2.5-flash";
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
 
