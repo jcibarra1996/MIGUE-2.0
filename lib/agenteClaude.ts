@@ -5,8 +5,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 // Singleton de módulo — solo se ejecuta en el servidor (Server Actions).
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
 
-// gemini-1.5-flash: rápido, bajo costo, excelente para extracción estructurada y visión.
-const MODELO = "gemini-1.5-flash";
+// gemini-3.5-flash: rápido, bajo costo, excelente para extracción estructurada y visión.
+const MODELO = "gemini-3.5-flash";
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
 
@@ -166,7 +166,7 @@ ${textoRecortado}`;
 
 /**
  * Envía INE y comprobante de domicilio como imágenes en una sola llamada
- * aprovechando las capacidades de visión de gemini-1.5-flash.
+ * aprovechando las capacidades de visión de gemini-3.5-flash.
  *
  * @param ineBase64          - INE en base64 (sin prefijo data:)
  * @param comprobanteBase64  - Comprobante en base64 (sin prefijo data:)
