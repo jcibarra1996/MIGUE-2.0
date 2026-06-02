@@ -5,8 +5,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 // Singleton de módulo — solo se ejecuta en el servidor (Server Actions).
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
 
-// gemini-2.5-pro: rápido, bajo costo, excelente para extracción estructurada y visión.
-const MODELO = "gemini-2.5-pro";
+// "gemini-2.5-flash: rápido, bajo costo, excelente para extracción estructurada y visión.
+const MODELO = ""gemini-2.5-flash;
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
 
