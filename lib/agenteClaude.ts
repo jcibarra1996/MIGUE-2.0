@@ -200,10 +200,13 @@ export async function analizarDocumentosIdentidad(
     generationConfig: { temperature: 0 },
   });
 
-  const resultado = await model.generateContent([
+  const tieneIne        = ineBase64.trim().length > 0;
+  const tieneComprobante = comprobanteBase64.trim().length > 0;
+
+  const partes: Parameters<typeof model.generateContent>[0] = [
     {
       text: `Eres un sistema de extracción de datos de documentos de identidad mexicanos.
-Lee las dos imágenes que te proporciono y extrae los datos exactamente como aparecen escritos,
+${tieneIne ? "Lee las imágenes que te proporciono y extrae" : "Extrae"} los datos exactamente como aparecen escritos,
 sin correcciones ortográficas ni inferencias.
 
 REGLAS ESTRICTAS:
@@ -215,21 +218,24 @@ REGLAS ESTRICTAS:
      "domicilio_completo": "string — dirección completa del comprobante: calle, número, colonia, municipio, estado y CP"
    }
 3. Copia los datos carácter por carácter. No corrijas acentos, mayúsculas ni abreviaciones.
-4. Si algún campo no es legible, coloca "NO LEGIBLE".
+4. Si algún campo no es legible o no se proporcionó imagen, coloca "NO LEGIBLE".
 5. El CURP siempre tiene exactamente 18 caracteres.
+${tieneIne && tieneComprobante ? "\nLa PRIMERA imagen es el INE. La SEGUNDA imagen es el comprobante de domicilio." : ""}`,
+    },
+  ];
 
-La PRIMERA imagen es el INE. La SEGUNDA imagen es el comprobante de domicilio.`,
-    },
-    {
-      inlineData: { mimeType: ineMediaType,          data: ineBase64 },
-    },
-    {
-      inlineData: { mimeType: comprobanteMediaType,   data: comprobanteBase64 },
-    },
-    {
-      text: "Devuelve ahora el JSON con los tres campos: nombre_completo_ine, curp y domicilio_completo.",
-    },
-  ]);
+  if (tieneIne) {
+    partes.push({ inlineData: { mimeType: ineMediaType, data: ineBase64 } });
+  }
+  if (tieneComprobante) {
+    partes.push({ inlineData: { mimeType: comprobanteMediaType, data: comprobanteBase64 } });
+  }
+
+  partes.push({
+    text: "Devuelve ahora el JSON con los tres campos: nombre_completo_ine, curp y domicilio_completo.",
+  });
+
+  const resultado = await model.generateContent(partes);
 
   const texto = resultado.response.text();
   return parsearJsonSeguro<ResultadoIdentidad>(texto);
