@@ -1,8 +1,7 @@
 "use server";
 
 import { createClient } from "@supabase/supabase-js";
-import { procesarActaConstitutiva } from "@/lib/extractorPdf";
-import { analizarTextoPoderes, analizarDocumentosIdentidad } from "@/lib/agenteClaude";
+import { analizarActaConstitutiva, analizarDocumentosIdentidad } from "@/lib/agenteClaude";
 import { validarIdentidad } from "@/lib/validador";
 import { generarContratoWord } from "@/lib/generadorWord";
 
@@ -118,12 +117,11 @@ async function limpiarBucket(paths: UrlsPayload["paths"]): Promise<void> {
  * eliminando definitivamente el error 413 en Vercel Hobby.
  *
  * Flujo:
- *   0. Descarga en paralelo los 5 buffers desde Supabase Storage
- *   1. Extrae texto del Acta (pdf-parse, sin API externa)
- *   2. Analiza poderes con Claude
- *   3. Analiza INE + comprobante con Claude visión
- *   4. Valida identidad con Dice coefficient
- *   5. Genera contrato Word con docxtemplater
+ *   1. Descarga en paralelo: Acta+Poder (→ base64) + template (→ buffer) + imágenes
+ *   2. Analiza el Acta directamente con Gemini PDF nativo (sin pdf-parse)
+ *   3. Analiza INE + comprobante con Gemini visión
+ *   4. Valida identidad con Dice coefficient (sin API)
+ *   5. Genera contrato Word con docxtemplater (sin API)
  *   6. Borra los temporales del bucket
  *   7. Retorna el .docx como base64
  */
@@ -141,43 +139,32 @@ export async function procesarContratoAction(
   }
 
   try {
-    // ── 1. Descargar buffers en paralelo (I/O concurrente) ────────────────────
-    const [actaBuffer, , templateBuffer] = await Promise.all([
-      urlABuffer(urls.actaConstitutiva),
-      urlABuffer(urls.poderNotarial),   // validado pero no procesado por separado aún
-      urlABuffer(urls.templateContrato),
-    ]);
+    // ── 1. Descargar todos los archivos en paralelo ───────────────────────────
+    // El Acta y el Poder se convierten a base64 para enviarlos a Gemini como PDF nativo.
+    // La plantilla se descarga como Buffer para docxtemplater.
+    const [actaBase64, , templateBuffer, ineData, comprobanteData] =
+      await Promise.all([
+        urlABase64(urls.actaConstitutiva).then((r) => r.base64),
+        urlABase64(urls.poderNotarial),          // incluido para validación futura
+        urlABuffer(urls.templateContrato),
+        urlABase64(urls.ine),
+        urlABase64(urls.comprobanteDomicilio),
+      ]);
 
-    const [ineData, comprobanteData] = await Promise.all([
-      urlABase64(urls.ine),
-      urlABase64(urls.comprobanteDomicilio),
-    ]);
-
-    // ── 2. Extraer texto del Acta Constitutiva (sin API) ──────────────────────
-    const { denominacion, textoPoderes } = await procesarActaConstitutiva(actaBuffer);
-
-    if (!textoPoderes) {
-      await limpiarBucket(paths);
-      return {
-        success: false,
-        error:
-          "No se encontró la sección de poderes en el Acta Constitutiva. Verifica que el PDF sea legible y contenga texto seleccionable.",
-      };
-    }
-
-    // ── 3. Analizar poderes con Claude ────────────────────────────────────────
-    const { apoderados } = await analizarTextoPoderes(textoPoderes);
+    // ── 2. Analizar el Acta Constitutiva directamente con Gemini (PDF nativo) ─
+    // Gemini lee el PDF sin pdf-parse: elimina el error "DOMMatrix is not defined".
+    const { denominacion, apoderados } = await analizarActaConstitutiva(actaBase64);
 
     if (apoderados.length === 0) {
       await limpiarBucket(paths);
       return {
         success: false,
         error:
-          "No se encontraron apoderados en el fragmento de poderes. Verifica que el Acta incluya la cláusula de Administración o Poderes.",
+          "Gemini no encontró apoderados en el Acta Constitutiva. Verifica que el PDF incluya la cláusula de Administración o Poderes y que no esté protegido.",
       };
     }
 
-    // ── 4. Analizar documentos de identidad con Claude visión ─────────────────
+    // ── 3. Analizar documentos de identidad con Gemini visión ─────────────────
     const { nombre_completo_ine, curp: _curp, domicilio_completo } =
       await analizarDocumentosIdentidad(
         ineData.base64,

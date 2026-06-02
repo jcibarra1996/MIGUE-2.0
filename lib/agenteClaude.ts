@@ -47,7 +47,74 @@ function parsearJsonSeguro<T>(raw: string): T {
   return JSON.parse(sinMarkdown.slice(inicio)) as T;
 }
 
-// ─── Función 1: análisis de texto de poderes ──────────────────────────────────
+export interface ResultadoActa {
+  denominacion: string;
+  apoderados: Apoderado[];
+}
+
+// ─── Función 0: análisis completo del Acta Constitutiva (PDF nativo) ──────────
+
+/**
+ * Recibe el Acta Constitutiva como base64 y se lo pasa a Gemini directamente
+ * como inlineData con mimeType "application/pdf".
+ * Gemini lee el PDF nativo sin necesidad de pdf-parse ni extracción previa de texto.
+ *
+ * Extrae en una sola llamada:
+ *   - denominacion: razón social completa con tipo societario
+ *   - apoderados:   lista con nombre, facultades y tipo de ejercicio
+ */
+export async function analizarActaConstitutiva(
+  actaBase64: string
+): Promise<ResultadoActa> {
+  const model = genAI.getGenerativeModel({
+    model: MODELO,
+    generationConfig: { temperature: 0 },
+  });
+
+  const resultado = await model.generateContent([
+    {
+      text: `Eres un abogado corporativo mexicano experto en derecho societario y notarial.
+Lee el documento PDF adjunto (Acta Constitutiva o Poder Notarial) y extrae con precisión absoluta:
+
+1. La DENOMINACIÓN SOCIAL completa de la empresa (nombre + tipo societario, ej. "ACME S.A. DE C.V.").
+2. Todos los APODERADOS LEGALES con sus facultades otorgadas.
+
+REGLAS ESTRICTAS:
+- Responde ÚNICAMENTE con un objeto JSON válido. Sin texto adicional, sin markdown.
+- El JSON debe tener exactamente esta estructura:
+  {
+    "denominacion": "string — razón social completa tal como aparece en el acta",
+    "apoderados": [
+      {
+        "nombre_completo": "string — nombre tal como aparece en el documento",
+        "facultades": ["string — nombre exacto de cada poder otorgado"],
+        "tipo_ejercicio": "individual | mancomunado"
+      }
+    ]
+  }
+- Si un apoderado puede actuar por sí solo: tipo_ejercicio = "individual".
+- Si requiere actuar junto con otro: tipo_ejercicio = "mancomunado".
+- Copia las facultades exactamente como están redactadas (ej. "Pleitos y Cobranzas", "Actos de Administración").
+- Si no encuentras apoderados, usa: "apoderados": []
+- Si no encuentras la denominación, usa: "denominacion": ""
+- No inventes ni infieras datos que no estén explícitamente en el documento.`,
+    },
+    {
+      inlineData: {
+        mimeType: "application/pdf",
+        data: actaBase64,
+      },
+    },
+    {
+      text: "Devuelve ahora el JSON con los campos 'denominacion' y 'apoderados'.",
+    },
+  ]);
+
+  const texto = resultado.response.text();
+  return parsearJsonSeguro<ResultadoActa>(texto);
+}
+
+
 
 /**
  * Envía el fragmento de texto del Acta/Poder Notarial a Gemini y devuelve
