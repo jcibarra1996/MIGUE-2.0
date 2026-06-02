@@ -1,11 +1,15 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleAIFileManager } from "@google/generative-ai/server";
+import fs from "fs";
+import path from "path";
+import os from "os";
 
-// ─── Cliente ──────────────────────────────────────────────────────────────────
+// ─── Clientes ─────────────────────────────────────────────────────────────────
 
-// Singleton de módulo — solo se ejecuta en el servidor (Server Actions).
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
+const genAI      = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY!);
 
-// "gemini-2.5-flash: rápido, bajo costo, excelente para extracción estructurada y visión.
+// gemini-2.5-flash: soporta File API y documentos de hasta 1 000 páginas.
 const MODELO = "gemini-2.5-flash";
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
@@ -14,6 +18,11 @@ export interface Apoderado {
   nombre_completo: string;
   facultades: string[];
   tipo_ejercicio: "individual" | "mancomunado" | string;
+}
+
+export interface ResultadoActa {
+  denominacion: string;
+  apoderados: Apoderado[];
 }
 
 export interface ResultadoPoderes {
@@ -26,12 +35,11 @@ export interface ResultadoIdentidad {
   domicilio_completo: string;
 }
 
-// ─── Helper interno ───────────────────────────────────────────────────────────
+// ─── Helper: parseo seguro de JSON ───────────────────────────────────────────
 
 /**
- * Extrae el primer bloque JSON válido de un string.
- * Gemini, al igual que Claude, a veces envuelve la respuesta en ```json … ```;
- * este helper lo elimina antes de parsear.
+ * Elimina bloques markdown opcionales y extrae el primer objeto JSON válido
+ * de la respuesta del modelo.
  */
 function parsearJsonSeguro<T>(raw: string): T {
   const sinMarkdown = raw
@@ -47,33 +55,90 @@ function parsearJsonSeguro<T>(raw: string): T {
   return JSON.parse(sinMarkdown.slice(inicio)) as T;
 }
 
-export interface ResultadoActa {
-  denominacion: string;
-  apoderados: Apoderado[];
-}
-
-// ─── Función 0: análisis completo del Acta Constitutiva (PDF nativo) ──────────
+// ─── Helper: subida de PDF a Google File API ─────────────────────────────────
 
 /**
- * Recibe el Acta Constitutiva como base64 y se lo pasa a Gemini directamente
- * como inlineData con mimeType "application/pdf".
- * Gemini lee el PDF nativo sin necesidad de pdf-parse ni extracción previa de texto.
+ * 1. Escribe el buffer en un archivo temporal en os.tmpdir().
+ * 2. Sube el archivo a la bóveda de Google con FileManager.
+ * 3. Devuelve el fileUri para usarlo en generateContent.
+ * 4. El llamador es responsable de limpiar (ver limpiarArchivoGoogle).
+ */
+async function subirPdfAGoogle(
+  buffer: Buffer,
+  nombreBase: string
+): Promise<{ fileUri: string; tempPath: string; googleName: string }> {
+  const tempPath = path.join(os.tmpdir(), `${Date.now()}-${nombreBase}.pdf`);
+
+  fs.writeFileSync(tempPath, buffer);
+
+  const uploadResponse = await fileManager.uploadFile(tempPath, {
+    mimeType: "application/pdf",
+    displayName: nombreBase,
+  });
+
+  return {
+    fileUri:    uploadResponse.file.uri,
+    tempPath,
+    googleName: uploadResponse.file.name,  // necesario para deleteFile
+  };
+}
+
+/**
+ * Limpieza estricta:
+ * - Borra el archivo temporal del sistema de ficheros de Vercel.
+ * - Borra el archivo de la bóveda de Google (evita acumulación y costos).
+ * Siempre se llama en un bloque finally — los errores solo se loguean.
+ */
+async function limpiarArchivoGoogle(
+  tempPath: string,
+  googleName: string
+): Promise<void> {
+  try {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  } catch (e) {
+    console.warn("[limpiarArchivoGoogle] No se pudo borrar el temporal:", e);
+  }
+  try {
+    await fileManager.deleteFile(googleName);
+  } catch (e) {
+    console.warn("[limpiarArchivoGoogle] No se pudo borrar de Google:", e);
+  }
+}
+
+// ─── Función 1: análisis del Acta Constitutiva vía File API ──────────────────
+
+/**
+ * Sube el Acta Constitutiva a Google File API y pide a Gemini que extraiga
+ * la denominación social y todos los apoderados en una sola llamada.
  *
- * Extrae en una sola llamada:
- *   - denominacion: razón social completa con tipo societario
- *   - apoderados:   lista con nombre, facultades y tipo de ejercicio
+ * Se usa File API en lugar de inlineData para evitar el error
+ * "400 Bad Request: Unable to process input" causado por payloads Base64
+ * demasiado grandes. File API pre-procesa el documento en los servidores
+ * de Google antes de pasarlo al modelo.
+ *
+ * @param actaBuffer - Buffer del PDF del Acta Constitutiva
  */
 export async function analizarActaConstitutiva(
-  actaBase64: string
+  actaBuffer: Buffer
 ): Promise<ResultadoActa> {
   const model = genAI.getGenerativeModel({
     model: MODELO,
     generationConfig: { temperature: 0 },
   });
 
-  const resultado = await model.generateContent([
-    {
-      text: `Eres un abogado corporativo mexicano experto en derecho societario y notarial.
+  let tempPath = "";
+  let googleName = "";
+
+  try {
+    // ── 1. Subir el PDF a Google File API ─────────────────────────────────────
+    const upload = await subirPdfAGoogle(actaBuffer, "acta-constitutiva");
+    tempPath   = upload.tempPath;
+    googleName = upload.googleName;
+
+    // ── 2. Llamar a Gemini con fileData (no inlineData) ───────────────────────
+    const resultado = await model.generateContent([
+      {
+        text: `Eres un abogado corporativo mexicano experto en derecho societario y notarial.
 Lee el documento PDF adjunto (Acta Constitutiva o Poder Notarial) y extrae con precisión absoluta:
 
 1. La DENOMINACIÓN SOCIAL completa de la empresa (nombre + tipo societario, ej. "ACME S.A. DE C.V.").
@@ -92,86 +157,37 @@ REGLAS ESTRICTAS:
       }
     ]
   }
-- Si un apoderado puede actuar por sí solo: tipo_ejercicio = "individual".
-- Si requiere actuar junto con otro: tipo_ejercicio = "mancomunado".
-- Copia las facultades exactamente como están redactadas (ej. "Pleitos y Cobranzas", "Actos de Administración").
-- Si no encuentras apoderados, usa: "apoderados": []
-- Si no encuentras la denominación, usa: "denominacion": ""
-- No inventes ni infieras datos que no estén explícitamente en el documento.`,
-    },
-    {
-      inlineData: {
-        mimeType: "application/pdf",
-        data: actaBase64,
+- tipo_ejercicio = "individual" si puede actuar solo; "mancomunado" si requiere otro apoderado.
+- Copia las facultades exactamente (ej. "Pleitos y Cobranzas", "Actos de Administración").
+- Si no encuentras apoderados: "apoderados": []
+- Si no encuentras la denominación: "denominacion": ""
+- No inventes ni infieras datos que no estén en el documento.`,
       },
-    },
-    {
-      text: "Devuelve ahora el JSON con los campos 'denominacion' y 'apoderados'.",
-    },
-  ]);
+      {
+        fileData: {
+          fileUri:  upload.fileUri,
+          mimeType: "application/pdf",
+        },
+      },
+      {
+        text: "Devuelve ahora el JSON con los campos 'denominacion' y 'apoderados'.",
+      },
+    ]);
 
-  const texto = resultado.response.text();
-  return parsearJsonSeguro<ResultadoActa>(texto);
+    const texto = resultado.response.text();
+    return parsearJsonSeguro<ResultadoActa>(texto);
+  } finally {
+    // Limpieza estricta: siempre se ejecuta, haya error o no
+    if (googleName) await limpiarArchivoGoogle(tempPath, googleName);
+  }
 }
 
-
-
-/**
- * Envía el fragmento de texto del Acta/Poder Notarial a Gemini y devuelve
- * la lista estructurada de apoderados con sus facultades.
- *
- * Se usa temperature: 0 para garantizar determinismo total.
- */
-export async function analizarTextoPoderes(
-  textoRecortado: string
-): Promise<ResultadoPoderes> {
-  const model = genAI.getGenerativeModel({
-    model: MODELO,
-    generationConfig: { temperature: 0 },
-  });
-
-  const prompt = `Eres un abogado corporativo mexicano experto en derecho societario y notarial.
-Tu única tarea es leer el siguiente fragmento de un instrumento notarial mexicano y extraer
-con precisión absoluta la información de los apoderados legales.
-
-REGLAS ESTRICTAS:
-1. Responde ÚNICAMENTE con un objeto JSON válido. Sin texto adicional, sin markdown, sin explicaciones.
-2. El JSON debe tener exactamente esta estructura:
-   {
-     "apoderados": [
-       {
-         "nombre_completo": "string — nombre tal como aparece en el documento",
-         "facultades": ["string — nombre exacto de cada poder otorgado"],
-         "tipo_ejercicio": "individual | mancomunado"
-       }
-     ]
-   }
-3. Si un apoderado puede actuar por sí solo, tipo_ejercicio es "individual".
-   Si requiere actuar junto con otro apoderado, es "mancomunado".
-4. Si no encuentras apoderados, devuelve: { "apoderados": [] }
-5. Copia las facultades exactamente como están redactadas
-   (ej. "Pleitos y Cobranzas", "Actos de Administración", "Actos de Dominio").
-6. No inventes ni inferencias datos que no estén explícitamente en el texto.
-
-FRAGMENTO A ANALIZAR:
-${textoRecortado}`;
-
-  const resultado = await model.generateContent(prompt);
-  const texto = resultado.response.text();
-
-  return parsearJsonSeguro<ResultadoPoderes>(texto);
-}
-
-// ─── Función 2: análisis de documentos de identidad (visión) ─────────────────
+// ─── Función 2: análisis de documentos de identidad (visión, inlineData) ─────
 
 /**
- * Envía INE y comprobante de domicilio como imágenes en una sola llamada
- * aprovechando las capacidades de visión de gemini-3.5-flash.
- *
- * @param ineBase64          - INE en base64 (sin prefijo data:)
- * @param comprobanteBase64  - Comprobante en base64 (sin prefijo data:)
- * @param ineMediaType       - MIME type de la imagen INE
- * @param comprobanteMediaType - MIME type del comprobante
+ * Las imágenes del INE y comprobante son documentos pequeños (< 5 MB habitualmente)
+ * por lo que inlineData sigue siendo apropiado — File API es necesario solo
+ * para PDFs pesados como el Acta Constitutiva.
  */
 export async function analizarDocumentosIdentidad(
   ineBase64: string,
@@ -184,7 +200,6 @@ export async function analizarDocumentosIdentidad(
     generationConfig: { temperature: 0 },
   });
 
-  // Gemini recibe imágenes como partes inline con mimeType + data base64
   const resultado = await model.generateContent([
     {
       text: `Eres un sistema de extracción de datos de documentos de identidad mexicanos.
@@ -205,19 +220,11 @@ REGLAS ESTRICTAS:
 
 La PRIMERA imagen es el INE. La SEGUNDA imagen es el comprobante de domicilio.`,
     },
-    // Primera imagen: INE
     {
-      inlineData: {
-        mimeType: ineMediaType,
-        data: ineBase64,
-      },
+      inlineData: { mimeType: ineMediaType,          data: ineBase64 },
     },
-    // Segunda imagen: comprobante de domicilio
     {
-      inlineData: {
-        mimeType: comprobanteMediaType,
-        data: comprobanteBase64,
-      },
+      inlineData: { mimeType: comprobanteMediaType,   data: comprobanteBase64 },
     },
     {
       text: "Devuelve ahora el JSON con los tres campos: nombre_completo_ine, curp y domicilio_completo.",

@@ -140,20 +140,20 @@ export async function procesarContratoAction(
 
   try {
     // ── 1. Descargar todos los archivos en paralelo ───────────────────────────
-    // El Acta y el Poder se convierten a base64 para enviarlos a Gemini como PDF nativo.
+    // El Acta se descarga como Buffer — File API lo escribe en disco y lo sube a Google.
+    // Las imágenes siguen como base64 (inlineData) porque son archivos pequeños.
     // La plantilla se descarga como Buffer para docxtemplater.
-    const [actaBase64, , templateBuffer, ineData, comprobanteData] =
+    const [actaBuffer, , templateBuffer, ineData, comprobanteData] =
       await Promise.all([
-        urlABase64(urls.actaConstitutiva).then((r) => r.base64),
-        urlABase64(urls.poderNotarial),          // incluido para validación futura
+        urlABuffer(urls.actaConstitutiva),
+        urlABuffer(urls.poderNotarial),              // incluido para validación futura
         urlABuffer(urls.templateContrato),
         urlABase64(urls.ine),
         urlABase64(urls.comprobanteDomicilio),
       ]);
 
-    // ── 2. Analizar el Acta Constitutiva directamente con Gemini (PDF nativo) ─
-    // Gemini lee el PDF sin pdf-parse: elimina el error "DOMMatrix is not defined".
-    const { denominacion, apoderados } = await analizarActaConstitutiva(actaBase64);
+    // ── 2. Analizar el Acta con Gemini File API (evita el error 400 por payload grande) ─
+    const { denominacion, apoderados } = await analizarActaConstitutiva(actaBuffer);
 
     if (apoderados.length === 0) {
       await limpiarBucket(paths);
