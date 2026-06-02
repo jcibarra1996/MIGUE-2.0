@@ -200,8 +200,16 @@ export async function analizarDocumentosIdentidad(
     generationConfig: { temperature: 0 },
   });
 
-  const tieneIne        = ineBase64.trim().length > 0;
-  const tieneComprobante = comprobanteBase64.trim().length > 0;
+  function limpiarBase64(raw: string): string {
+    const idx = raw.indexOf("base64,");
+    return idx !== -1 ? raw.slice(idx + 7) : raw;
+  }
+
+  const inePayload          = limpiarBase64(ineBase64.trim());
+  const comprobantePayload  = limpiarBase64(comprobanteBase64.trim());
+
+  const tieneIne        = inePayload.length > 100;
+  const tieneComprobante = comprobantePayload.length > 100;
 
   const partes: Parameters<typeof model.generateContent>[0] = [
     {
@@ -225,10 +233,10 @@ ${tieneIne && tieneComprobante ? "\nLa PRIMERA imagen es el INE. La SEGUNDA imag
   ];
 
   if (tieneIne) {
-    partes.push({ inlineData: { mimeType: ineMediaType, data: ineBase64 } });
+    partes.push({ inlineData: { mimeType: ineMediaType, data: inePayload } });
   }
   if (tieneComprobante) {
-    partes.push({ inlineData: { mimeType: comprobanteMediaType, data: comprobanteBase64 } });
+    partes.push({ inlineData: { mimeType: comprobanteMediaType, data: comprobantePayload } });
   }
 
   partes.push({
