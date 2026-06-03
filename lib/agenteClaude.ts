@@ -9,8 +9,8 @@ import os from "os";
 const genAI      = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY!);
 
-// gemini-2.5-flash: soporta File API y documentos de hasta 1 000 páginas.
-const MODELO = "gemini-2.5-flash";
+// gemini-2.0-flash: modelo GA con soporte confirmado de File API + PDF.
+const MODELO = "gemini-2.0-flash";
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
 
@@ -150,6 +150,8 @@ export async function analizarActaConstitutiva(
     tempPath   = upload.tempPath;
     googleName = upload.googleName;
 
+    console.log("[analizarActaConstitutiva] archivo listo:", upload.fileUri);
+
     // ── 2. Llamar a Gemini con fileData (no inlineData) ───────────────────────
     const resultado = await model.generateContent([
       {
@@ -189,10 +191,10 @@ REGLAS ESTRICTAS:
       },
     ]);
 
+    console.log("[analizarActaConstitutiva] respuesta recibida OK");
     const texto = resultado.response.text();
     return parsearJsonSeguro<ResultadoActa>(texto);
   } finally {
-    // Limpieza estricta: siempre se ejecuta, haya error o no
     if (googleName) await limpiarArchivoGoogle(tempPath, googleName);
   }
 }
@@ -221,8 +223,11 @@ export async function analizarDocumentosIdentidad(
   const tieneIne         = inePayload.length > 100;
   const tieneComprobante = comprobantePayload.length > 100;
 
+  console.log("[analizarDocumentosIdentidad] tieneIne:", tieneIne, "tieneComprobante:", tieneComprobante);
+
   // Si no hay ninguna imagen real, evitar la llamada a Gemini por completo.
   if (!tieneIne && !tieneComprobante) {
+    console.log("[analizarDocumentosIdentidad] sin imágenes — retornando sin llamar a Gemini");
     return {
       nombre_completo_ine: "NO PROPORCIONADO",
       curp:                "NO PROPORCIONADO",
