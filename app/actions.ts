@@ -25,16 +25,16 @@ export interface UrlsPayload {
   urls: {
     actaConstitutiva: string;
     poderNotarial: string;
-    ine: string;
-    comprobanteDomicilio: string;
+    ine?: string;
+    comprobanteDomicilio?: string;
     templateContrato: string;
   };
   /** Rutas dentro del bucket para poder borrarlas al terminar. */
   paths: {
     actaConstitutiva: string;
     poderNotarial: string;
-    ine: string;
-    comprobanteDomicilio: string;
+    ine?: string;
+    comprobanteDomicilio?: string;
     templateContrato: string;
   };
   monto_credito: string;
@@ -80,6 +80,9 @@ async function urlABuffer(url: string): Promise<Buffer> {
 async function urlABase64(
   url: string
 ): Promise<{ base64: string; mime: "image/jpeg" | "image/png" | "image/gif" | "image/webp" }> {
+  if (!url || url.trim().length === 0) {
+    return { base64: "", mime: "image/jpeg" };
+  }
   const buf = await urlABuffer(url);
   const base64 = buf.toString("base64");
   const lower = url.toLowerCase();
@@ -95,7 +98,8 @@ async function urlABase64(
 async function limpiarBucket(paths: UrlsPayload["paths"]): Promise<void> {
   try {
     const supabase = getSupabaseAdmin();
-    const rutas = Object.values(paths);
+    const rutas = Object.values(paths).filter((r): r is string => !!r && r.length > 0);
+    if (rutas.length === 0) return;
     const { error } = await supabase.storage.from("temporales").remove(rutas);
     if (error) {
       // No lanzamos — la limpieza es best-effort para no ocultar el éxito de la operación
@@ -131,8 +135,9 @@ export async function procesarContratoAction(
   const { urls, paths, monto_credito, dias_credito } = payload;
 
   // ── 0. Validación básica del payload ──────────────────────────────────────
-  const camposUrl = Object.entries(urls) as [string, string][];
-  for (const [campo, url] of camposUrl) {
+  const camposObligatorios: (keyof typeof urls)[] = ["actaConstitutiva", "poderNotarial", "templateContrato"];
+  for (const campo of camposObligatorios) {
+    const url = urls[campo];
     if (!url || typeof url !== "string") {
       return { success: false, error: `URL inválida para el campo "${campo}".` };
     }
@@ -148,8 +153,8 @@ export async function procesarContratoAction(
         urlABuffer(urls.actaConstitutiva),
         urlABuffer(urls.poderNotarial),              // incluido para validación futura
         urlABuffer(urls.templateContrato),
-        urlABase64(urls.ine),
-        urlABase64(urls.comprobanteDomicilio),
+        urlABase64(urls.ine ?? ""),
+        urlABase64(urls.comprobanteDomicilio ?? ""),
       ]);
 
     // ── 2. Analizar el Acta con Gemini File API (evita el error 400 por payload grande) ─
