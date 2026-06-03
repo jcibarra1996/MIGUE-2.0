@@ -189,32 +189,46 @@ REGLAS ESTRICTAS:
  * por lo que inlineData sigue siendo apropiado — File API es necesario solo
  * para PDFs pesados como el Acta Constitutiva.
  */
+function limpiarBase64(raw: string): string {
+  const idx = raw.indexOf("base64,");
+  return idx !== -1 ? raw.slice(idx + 7) : raw.trim();
+}
+
 export async function analizarDocumentosIdentidad(
   ineBase64: string,
   comprobanteBase64: string,
   ineMediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" = "image/jpeg",
   comprobanteMediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" = "image/jpeg"
 ): Promise<ResultadoIdentidad> {
+  const inePayload         = limpiarBase64(ineBase64);
+  const comprobantePayload = limpiarBase64(comprobanteBase64);
+
+  const tieneIne         = inePayload.length > 100;
+  const tieneComprobante = comprobantePayload.length > 100;
+
+  // Si no hay ninguna imagen real, evitar la llamada a Gemini por completo.
+  if (!tieneIne && !tieneComprobante) {
+    return {
+      nombre_completo_ine: "NO PROPORCIONADO",
+      curp:                "NO PROPORCIONADO",
+      domicilio_completo:  "NO PROPORCIONADO",
+    };
+  }
+
   const model = genAI.getGenerativeModel({
     model: MODELO,
     generationConfig: { temperature: 0 },
   });
 
-  function limpiarBase64(raw: string): string {
-    const idx = raw.indexOf("base64,");
-    return idx !== -1 ? raw.slice(idx + 7) : raw;
-  }
+  // Construir el array de partes con tipos explícitos para satisfacer el SDK.
+  type Parte =
+    | { text: string }
+    | { inlineData: { mimeType: string; data: string } };
 
-  const inePayload          = limpiarBase64(ineBase64.trim());
-  const comprobantePayload  = limpiarBase64(comprobanteBase64.trim());
-
-  const tieneIne        = inePayload.length > 100;
-  const tieneComprobante = comprobantePayload.length > 100;
-
-  const partes: Parameters<typeof model.generateContent>[0] = [
+  const partes: Parte[] = [
     {
       text: `Eres un sistema de extracción de datos de documentos de identidad mexicanos.
-${tieneIne ? "Lee las imágenes que te proporciono y extrae" : "Extrae"} los datos exactamente como aparecen escritos,
+Lee las imágenes que te proporciono y extrae los datos exactamente como aparecen escritos,
 sin correcciones ortográficas ni inferencias.
 
 REGLAS ESTRICTAS:
@@ -226,7 +240,7 @@ REGLAS ESTRICTAS:
      "domicilio_completo": "string — dirección completa del comprobante: calle, número, colonia, municipio, estado y CP"
    }
 3. Copia los datos carácter por carácter. No corrijas acentos, mayúsculas ni abreviaciones.
-4. Si algún campo no es legible o no se proporcionó imagen, coloca "NO LEGIBLE".
+4. Si algún campo no es legible, coloca "NO LEGIBLE".
 5. El CURP siempre tiene exactamente 18 caracteres.
 ${tieneIne && tieneComprobante ? "\nLa PRIMERA imagen es el INE. La SEGUNDA imagen es el comprobante de domicilio." : ""}`,
     },
@@ -243,8 +257,8 @@ ${tieneIne && tieneComprobante ? "\nLa PRIMERA imagen es el INE. La SEGUNDA imag
     text: "Devuelve ahora el JSON con los tres campos: nombre_completo_ine, curp y domicilio_completo.",
   });
 
-  const resultado = await model.generateContent(partes);
-
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const resultado = await model.generateContent(partes as any);
   const texto = resultado.response.text();
   return parsearJsonSeguro<ResultadoIdentidad>(texto);
 }
