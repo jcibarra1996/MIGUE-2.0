@@ -76,10 +76,25 @@ async function subirPdfAGoogle(
     displayName: nombreBase,
   });
 
+  const googleName = uploadResponse.file.name;
+
+  // Esperar a que Google procese el archivo antes de usarlo en generateContent.
+  // Sin este polling, generateContent puede recibir un archivo en estado PROCESSING
+  // y responder con 400 "Unable to process input image".
+  let file = await fileManager.getFile(googleName);
+  while (file.state === "PROCESSING") {
+    await new Promise((r) => setTimeout(r, 2000));
+    file = await fileManager.getFile(googleName);
+  }
+
+  if (file.state === "FAILED") {
+    throw new Error(`Google File API rechazó el archivo "${nombreBase}": estado FAILED.`);
+  }
+
   return {
     fileUri:    uploadResponse.file.uri,
     tempPath,
-    googleName: uploadResponse.file.name,  // necesario para deleteFile
+    googleName,
   };
 }
 
