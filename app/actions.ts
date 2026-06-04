@@ -201,13 +201,20 @@ export async function procesarContratoAction(
     const apoderadoValidado = validacion.apoderado!;
     const facultades_texto  = apoderadoValidado.facultades.join(", ");
 
+    const denominacionFinal = denominacion || "NO DETECTADA";
     const wordBuffer = generarContratoWord(templateBuffer, {
-      denominacion_social: denominacion || "NO DETECTADA",
+      // Nombres canónicos
+      denominacion_social: denominacionFinal,
       nombre_apoderado:    nombre_completo_ine,
       domicilio:           domicilio_completo,
       facultades_texto,
       monto_credito:  monto_credito  || "0.00",
       dias_credito:   dias_credito   || "15",
+      // Alias alternativos
+      domicilio_cliente:   domicilio_completo,
+      nombre_cliente:      nombre_completo_ine,
+      razon_social:        denominacionFinal,
+      denominacion:        denominacionFinal,
     });
 
     // ── 7. Limpiar temporales (best-effort, no bloquea la respuesta) ──────────

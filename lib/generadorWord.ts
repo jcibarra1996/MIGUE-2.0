@@ -8,15 +8,18 @@ import Docxtemplater from "docxtemplater";
  * El template debe contener las mismas claves entre llaves: {denominacion_social}, etc.
  */
 export interface DatosContrato {
+  // Nombres canónicos
   denominacion_social: string;
   nombre_apoderado: string;
   domicilio: string;
-  // Ej. "Pleitos y Cobranzas, Actos de Administración, Actos de Dominio"
   facultades_texto: string;
-  // Ej. "500,000.00" — se inserta tal cual en el placeholder {monto_credito}
   monto_credito: string;
-  // Ej. "30" — días de crédito autorizados; placeholder {dias_credito}
   dias_credito: string;
+  // Alias alternativos — para templates que usen nombres distintos
+  domicilio_cliente: string;
+  nombre_cliente: string;
+  razon_social: string;
+  denominacion: string;
 }
 
 // ─── Función principal exportada ──────────────────────────────────────────────
