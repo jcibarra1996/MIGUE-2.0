@@ -41,24 +41,34 @@ export function generarContratoWord(
   templateBuffer: Buffer,
   datos: DatosContrato
 ): Buffer {
-  // PizZip descomprime el .docx (que internamente es un ZIP de XMLs)
   const zip = new PizZip(templateBuffer);
 
-  // Docxtemplater toma el ZIP abierto y prepara el motor de plantillas
   const doc = new Docxtemplater(zip, {
-    // paragraphLoop: true permite iterar sobre párrafos si en el futuro
-    // se añaden listas de facultades con {#facultades}…{/facultades}
     paragraphLoop: true,
-    // linebreaks: true convierte \n en saltos de línea Word dentro del template
     linebreaks: true,
+    // Variables no encontradas en el template → string vacío en lugar de error fatal
+    nullGetter() { return ""; },
   });
 
-  // Inyecta los datos en los placeholders del template
-  doc.render(datos);
+  try {
+    doc.render(datos);
+  } catch (err: unknown) {
+    // Docxtemplater lanza errores con una propiedad `properties.errors` detallada.
+    // La re-lanzamos como Error estándar para que actions.ts la serialice correctamente.
+    const e = err as { properties?: { errors?: unknown[] }; message?: string };
+    if (e?.properties?.errors?.length) {
+      const detalle = (e.properties.errors as Array<{ properties?: { explanation?: string } }>)
+        .map((x) => x?.properties?.explanation ?? JSON.stringify(x))
+        .join("; ");
+      throw new Error(`Error en la plantilla .docx: ${detalle}`);
+    }
+    throw new Error(`Error al renderizar la plantilla: ${e?.message ?? String(err)}`);
+  }
 
-  // Genera el ZIP resultante como Buffer de Node.js
-  // "nodebuffer" es el tipo de salida compatible con NextResponse
-  const outputBuffer = doc.getZip().generate({ type: "nodebuffer" });
+  const outputBuffer = doc.getZip().generate({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+  });
 
   return outputBuffer;
 }
